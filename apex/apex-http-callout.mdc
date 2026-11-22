@@ -1,0 +1,71 @@
+---
+description: Standard Apex HTTP callout pattern — Bearer token auth, timeout from Custom Metadata, URL encoding, JSON.deserializeUntyped for parsing, throw CalloutException on non-200 so the caller can handle fallback
+globs: force-app/**/classes/*.cls
+alwaysApply: false
+---
+
+# Apex — HTTP Callout Pattern
+
+## Standard pattern
+
+```java
+private static MyResponseType callExternalApi(String recordId, MyConfig__mdt config) {
+    Integer timeoutMs = config.Callout_Timeout_Ms__c != null
+        ? config.Callout_Timeout_Ms__c.intValue()
+        : 10000;
+
+    // URL-encode any dynamic query parameters
+    String filters = EncodingUtil.urlEncode('[["field","=","value"]]', 'UTF-8');
+
+    HttpRequest req = new HttpRequest();
+    req.setEndpoint(config.Endpoint__c + '/api/resource/MyDoc?filters=' + filters);
+    req.setMethod('GET');
+    req.setHeader('Authorization', 'Bearer ' + getAccessToken(config));
+    req.setHeader('Accept', 'application/json');
+    req.setTimeout(timeoutMs);
+
+    HttpResponse res = new Http().send(req);
+
+    if (res.getStatusCode() != 200) {
+        throw new CalloutException('API returned HTTP '
+            + res.getStatusCode() + ': ' + res.getBody());
+    }
+
+    Map<String, Object> parsed = (Map<String, Object>) JSON.deserializeUntyped(res.getBody());
+    // Access response fields: parsed.get('data'), etc.
+    return buildResult(parsed);
+}
+```
+
+## Caller always wraps in try/catch
+
+```java
+MyResponseType result;
+try {
+    result = callExternalApi(recordId, config);
+} catch (Exception ex) {
+    System.debug('Callout failed: ' + ex.getMessage());
+    result = buildFallbackResult();  // never leave result null
+}
+```
+
+## Key rules
+
+- Always set a timeout — default Salesforce timeout is 10s but external APIs can be slow; read from Custom Metadata so it's configurable without a deploy
+- Always URL-encode filter strings — special characters in query params silently corrupt the request
+- Use `JSON.deserializeUntyped` → `Map<String, Object>` for parsing external API responses; typed deserialization breaks on unexpected or missing fields
+- Throw `CalloutException` (not a custom exception) on non-200 — callers can catch `Exception` generically and handle fallback
+- Named Credential or Custom Metadata for endpoint + credentials — never hardcode URLs or tokens in Apex
+
+## POST with JSON body
+
+```java
+HttpRequest req = new HttpRequest();
+req.setEndpoint(config.Endpoint__c + '/api/resource/Purchase%20Order');
+req.setMethod('POST');
+req.setHeader('Content-Type', 'application/json');
+req.setHeader('Accept', 'application/json');
+req.setHeader('Authorization', 'Bearer ' + getAccessToken(config));
+req.setBody(JSON.serialize(bodyMap));
+req.setTimeout(timeoutMs);
+```

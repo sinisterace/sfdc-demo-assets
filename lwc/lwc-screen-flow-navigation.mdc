@@ -1,0 +1,48 @@
+---
+description: Correct NavigationMixin syntax for launching a Salesforce Screen Flow as a quick action from an LWC component on a record page
+globs: force-app/**/*.js
+alwaysApply: false
+---
+
+# LWC — Launching a Screen Flow via Quick Action
+
+## Use `standard__quickAction` with a single dot-notation `apiName`
+
+Using `standard__objectPage` or splitting the action name into separate attributes causes a "Page doesn't exist" error at runtime.
+
+```javascript
+// BAD — "Page doesn't exist" at runtime
+this[NavigationMixin.Navigate]({
+    type: 'standard__objectPage',
+    attributes: {
+        objectApiName: 'Opportunity',
+        actionName: 'Commit_Readiness_Check'
+    }
+});
+
+// GOOD
+this[NavigationMixin.Navigate]({
+    type: 'standard__quickAction',
+    attributes: { apiName: 'Opportunity.Commit_Readiness_Check' },
+    state: { recordId: this.recordId }
+});
+```
+
+## Key rules
+
+- `type` must be `standard__quickAction` — not `standard__objectPage` or `standard__component`
+- `apiName` format is `ObjectApiName.QuickActionApiName` — a single dot-separated string
+- `recordId` is passed in `state`, not in `attributes`
+- The quick action must be added to the object's page layout or Lightning App Builder page for the navigation to resolve
+
+## Quick action API name
+
+Find the correct `apiName` in **Setup → Object Manager → (Object) → Buttons, Links, and Actions**. The developer name shown there (e.g. `Commit_Readiness_Check`) combines with the object API name: `Opportunity.Commit_Readiness_Check`.
+
+## Prerequisite import
+
+```javascript
+import { NavigationMixin } from 'lightning/navigation';
+
+export default class MyComponent extends NavigationMixin(LightningElement) { ... }
+```

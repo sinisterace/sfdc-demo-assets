@@ -1,0 +1,49 @@
+---
+description: Rules for Apex payload classes used as Agentforce Lightning Type data contracts
+globs: force-app/**/classes/*.cls
+alwaysApply: false
+---
+
+# Agentforce — Apex Payload Class Rules
+
+Apex classes that serve as Lightning Type data contracts must follow these rules exactly.
+
+## Access modifier
+
+Use `public class` — NOT `global`. Global breaks the Agentforce type binding.
+
+```java
+// ✅ GOOD
+public class MyCardOutput { ... }
+
+// ❌ BAD
+global class MyCardOutput { ... }
+```
+
+## Field annotations
+
+Every field needs BOTH `@AuraEnabled` AND `@InvocableVariable`.
+
+```java
+// ✅ GOOD
+@AuraEnabled @InvocableVariable(label='Title' description='Card title') public String title;
+
+// ❌ BAD — missing @InvocableVariable; flow can't bind the field
+@AuraEnabled public String title;
+```
+
+## Field types
+
+Use only primitives: `String`, `Integer`, `Boolean`, `Decimal`.
+
+Never use `List<Object>` — it causes LightningTypeBundle deploy failures with "Apex class isn't supported".
+
+Serialize complex data as a JSON `String` and parse it in the LWC:
+
+```java
+// ✅ GOOD — serialize complex data as JSON String
+@AuraEnabled @InvocableVariable(label='Items JSON') public String itemsJson;
+
+// ❌ BAD — causes deploy failure
+@AuraEnabled @InvocableVariable(label='Items') public List<Object> items;
+```

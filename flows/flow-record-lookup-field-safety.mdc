@@ -1,0 +1,42 @@
+---
+description: Avoid runtime faults in Salesforce Screen Flows caused by querying LongTextArea or large fields in Get Records elements
+globs: **/*.flow-meta.xml
+alwaysApply: false
+---
+
+# Flow Record Lookup — Field Safety
+
+## Never query LongTextArea fields in a Flow Get Records element
+
+Including a `LongTextArea` field in a Flow's `<queriedFields>` causes a silent UI API wire failure at runtime. The flow element faults with no useful error message.
+
+```xml
+<!-- BAD — causes silent runtime fault -->
+<recordLookups>
+    <queriedFields>Id</queriedFields>
+    <queriedFields>Stockout_Summary_JSON__c</queriedFields>  <!-- LongTextArea: never include -->
+</recordLookups>
+
+<!-- GOOD — fetch only standard / formula / short-text fields here -->
+<recordLookups>
+    <queriedFields>Id</queriedFields>
+    <queriedFields>Fulfillment_Risk__c</queriedFields>
+    <queriedFields>Total_Shortfall_Units__c</queriedFields>
+</recordLookups>
+```
+
+## Rule of thumb
+
+Exclude any field that is:
+- `LongTextArea` or `RichTextArea` type
+- Likely to exceed ~32 KB in value
+
+## How to access large text fields in a Flow
+
+Use an Apex Invocable Action with `@AuraEnabled(cacheable=false)` to fetch the field value, then assign the output to a Flow variable. Do not attempt to retrieve it via `Get Records`.
+
+## Diagnosing a flow fault from this cause
+
+1. Open **Setup → Flow → (your flow) → View All Versions → Debug**
+2. Look for a fault on a `Get Records` element with message referencing "field is not retrievable" or a generic "An internal error has occurred"
+3. Remove large-text fields from `queriedFields` one by one to isolate the culprit

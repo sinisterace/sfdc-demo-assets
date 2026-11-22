@@ -1,0 +1,240 @@
+---
+description: End-to-end architecture, file structure, and gotchas for building Agentforce Lightning Type cards (rich UI components in agent chat)
+globs: force-app/**
+alwaysApply: false
+---
+
+# Agentforce Lightning Types — Architecture
+
+A **Lightning Type** is a custom UI card that renders inside an Agentforce agent conversation window. Instead of the agent responding with plain text, it surfaces a rich interactive component — a calendar, menu, seat selector, image carousel, etc.
+
+The card is triggered by an agent action (a Flow), returns a typed Apex payload, and the Lightning Type framework renders the associated LWC in the chat.
+
+---
+
+## Architecture Overview
+
+```
+User message
+        │
+        ▼
+Agentforce Agent (Topic)
+        │  calls
+        ▼
+AutoLaunchedFlow
+        │  returns Apex object
+        ▼
+MyCardOutput (Apex payload class)
+        │  matched by
+        ▼
+LightningTypeBundle: myCardType
+  ├── schema.json         ← registers the Apex class as a Lightning Type
+  └── renderer.json       ← maps to the LWC component
+        │  renders
+        ▼
+LWC: myCardCmp            ← the actual UI in the chat window
+        │  user interacts
+        ▼
+lightning__interaction event ← sends structured payload back to the agent
+```
+
+---
+
+## File Structure
+
+```
+force-app/main/default/
+│
+├── classes/
+│   ├── MyCardOutput.cls               ← Apex payload class (data contract)
+│   └── MyCardOutput.cls-meta.xml
+│
+├── lightningTypes/
+│   └── myCardType/
+│       ├── schema.json                ← registers type, links to Apex class
+│       └── lightningDesktopGenAi/
+│           └── renderer.json          ← maps to LWC component
+│
+├── lwc/
+│   └── myCardCmp/
+│       ├── myCardCmp.html
+│       ├── myCardCmp.js
+│       ├── myCardCmp.css
+│       └── myCardCmp.js-meta.xml
+│
+└── flows/
+    └── My_Card_Flow.flow-meta.xml     ← AutoLaunchedFlow, invoked by agent action
+```
+
+---
+
+## Every File — Correct Pattern
+
+### 1. Apex Payload Class
+
+```java
+public class MyCardOutput {
+    @AuraEnabled @InvocableVariable(label='Type' description='...') public String type;
+    @AuraEnabled @InvocableVariable(label='Message' description='...') public String message;
+}
+```
+
+- Must be `public` — NOT `global` (global breaks the Agentforce type binding)
+- Every field needs BOTH `@AuraEnabled` AND `@InvocableVariable`
+- Keep fields simple types: `String`, `Integer`, `Boolean`, `Decimal` — no `List<Object>`
+
+---
+
+### 2. `schema.json`
+
+```json
+{
+  "title" : "My Card",
+  "description" : "...",
+  "lightning:type" : "@apexClassType/c__MyCardOutput"
+}
+```
+
+- `lightning:type` format: `@apexClassType/c__<ClassName>`
+- `c__` prefix = default namespace (no managed package)
+
+---
+
+### 3. `renderer.json`
+
+```json
+{
+  "renderer" : {
+    "componentOverrides" : {
+      "$" : {
+        "definition" : "c/myCardCmp"
+      }
+    }
+  }
+}
+```
+
+- Lives in the `lightningDesktopGenAi/` subfolder
+- Component name uses `c/` prefix (default namespace), camelCase
+- Do NOT add an `"attributes"` block — the framework passes the Apex payload to the LWC automatically as `@api value`
+
+---
+
+### 4. `js-meta.xml`
+
+```xml
+<LightningComponentBundle xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>64.0</apiVersion>
+    <isExposed>true</isExposed>
+    <targets>
+        <target>lightning__AgentforceOutput</target>
+        <target>lightning__AppPage</target>
+        <target>lightning__RecordPage</target>
+        <target>lightning__HomePage</target>
+    </targets>
+</LightningComponentBundle>
+```
+
+- `lightning__AgentforceOutput` is required for the component to appear in Agentforce chat
+- Do NOT add a `<targetConfigs>` block — this breaks rendering
+
+---
+
+### 5. LWC JS — receiving data and sending events
+
+**Receiving the Apex payload:**
+```js
+import { LightningElement, api } from 'lwc';
+
+export default class MyCardCmp extends LightningElement {
+    @api value;   // Agentforce automatically passes the Apex object here
+
+    get cardData() {
+        return this.value || {};   // always guard against null
+    }
+}
+```
+
+**Sending data back to the agent:**
+```js
+this.dispatchEvent(new CustomEvent('lightning__interaction', {
+    bubbles: true,
+    composed: true,
+    detail: {
+        interactionType: 'response',
+        payload: {
+            action: 'user_selection',
+            message: 'User selected item X'
+        }
+    }
+}));
+```
+
+- Use `lightning__interaction` — NOT `sendmessage`
+- `interactionType` must be `'response'`
+- Put whatever data you want the agent to act on in `payload`
+
+---
+
+### 6. Flow
+
+```xml
+<processType>AutoLaunchedFlow</processType>
+
+<!-- Output variable: the Apex payload object -->
+<variables>
+    <name>cardOutput</name>
+    <apexClass>MyCardOutput</apexClass>
+    <dataType>Apex</dataType>
+    <isInput>false</isInput>
+    <isOutput>true</isOutput>
+</variables>
+
+<!-- Input variable: required by Agentforce action UI (even if unused) -->
+<variables>
+    <name>userContext</name>
+    <dataType>String</dataType>
+    <isInput>true</isInput>
+    <isOutput>false</isOutput>
+</variables>
+```
+
+- Must be `AutoLaunchedFlow`
+- You MUST have at least one input variable — the Agentforce action UI requires it
+
+---
+
+## Agent Builder UI Setup
+
+| Field | Value |
+|---|---|
+| Action Type | Flow |
+| Output — Show in conversation | ✅ checked |
+| Output — Output Rendering | set to your Lightning Type name |
+
+---
+
+## Common Mistakes
+
+| # | Mistake | Symptom | Fix |
+|---|---|---|---|
+| 1 | Apex class was `global` | Card rendered as plain text | Change to `public class` |
+| 2 | Apex fields missing `@InvocableVariable` | Flow couldn't bind fields | Add `@InvocableVariable` to every field |
+| 3 | `js-meta.xml` had `<targetConfigs>` | Component didn't render in chat | Remove `targetConfigs` entirely |
+| 4 | `renderer.json` had `"attributes"` block | Value not passed to LWC | Remove the `attributes` block |
+| 5 | LWC dispatched `sendmessage` event | Agent received raw text string | Change to `lightning__interaction` with `interactionType: 'response'` |
+| 6 | Flow had no input variable | Agentforce action UI blocked | Add dummy `userContext` String input variable |
+| 7 | Apex class used `List<Object>` property | LightningTypeBundle deploy failed | Use JSON `String` instead; parse in LWC |
+
+---
+
+## Checklist — Every New Lightning Type
+
+- [ ] Apex: `public class`, `@AuraEnabled` + `@InvocableVariable` on every field, no `List<Object>`
+- [ ] `schema.json`: `"lightning:type": "@apexClassType/c__<ClassName>"`
+- [ ] `renderer.json`: just `"definition": "c/<lwcName>"` — no `attributes` block
+- [ ] `js-meta.xml`: `lightning__AgentforceOutput` target, NO `targetConfigs`
+- [ ] LWC JS: `@api value` to receive payload, `lightning__interaction` to respond
+- [ ] Flow: `AutoLaunchedFlow`, Apex output variable, at least one String input variable
+- [ ] Agent Builder: `Show in conversation` checked, `Output Rendering` set
+- [ ] Agent version activated + Embedded Service Deployment re-published

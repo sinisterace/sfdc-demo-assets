@@ -1,0 +1,66 @@
+---
+description: Record-Triggered Flows that need external callouts must use an AsyncAfterCommit scheduled path and delegate all callout + DML logic to an Apex invocable action
+globs: **/*.flow-meta.xml
+alwaysApply: false
+---
+
+# Flow — RTF Async Callout Pattern
+
+## Callouts are not allowed on synchronous Flow paths
+
+A Record-Triggered Flow cannot make HTTP callouts on its synchronous `RecordAfterSave` path. Attempting to call an Apex action with `callout=true` from a sync path throws a runtime error.
+
+## Use an AsyncAfterCommit scheduled path
+
+Route callout work through a scheduled path with `pathType: AsyncAfterCommit`:
+
+```xml
+<start>
+    <filterLogic>and</filterLogic>
+    <filters>
+        <field>StageName</field>
+        <operator>EqualTo</operator>
+        <value><stringValue>Commit</stringValue></value>
+    </filters>
+    <filters>
+        <field>StageName</field>
+        <operator>IsChanged</operator>
+        <value><booleanValue>true</booleanValue></value>
+    </filters>
+    <object>Opportunity</object>
+    <recordTriggerType>Update</recordTriggerType>
+    <scheduledPaths>
+        <connector>
+            <targetReference>Run_Orchestrator</targetReference>
+        </connector>
+        <pathType>AsyncAfterCommit</pathType>
+    </scheduledPaths>
+    <triggerType>RecordAfterSave</triggerType>
+</start>
+```
+
+## Delegate all logic to a single Apex invocable action
+
+Do NOT chain multiple Flow elements (decisions, record updates, screen components) after the async path. Async-path Flow record updates have their own governor limits and DML restrictions that differ from Apex.
+
+Delegate everything — callout, risk computation, record update, task creation — to one `@InvocableMethod(callout=true)` Apex class:
+
+```xml
+<actionCalls>
+    <name>Run_Orchestrator</name>
+    <actionName>MyOrchestratorClass</actionName>
+    <actionType>apex</actionType>
+    <inputParameters>
+        <name>recordId</name>
+        <value><elementReference>$Record.Id</elementReference></value>
+    </inputParameters>
+    <storeOutputAutomatically>false</storeOutputAutomatically>
+</actionCalls>
+```
+
+## Key rules
+
+- `processType` must be `AutoLaunchedFlow` for RTFs
+- The async scheduled path fires after the transaction commits — `$Record` contains the saved values
+- Pass only the record Id to Apex; fetch all other data inside Apex via SOQL
+- All DML on the triggering record must happen in Apex — a single consolidated `update` at the end

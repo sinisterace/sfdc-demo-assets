@@ -1,0 +1,72 @@
+---
+description: Standard structure for Apex invocable actions called by Flow — Request/Response inner classes, @InvocableVariable on all fields, callout=true, exception handling that returns a status rather than throwing
+globs: force-app/**/classes/*.cls
+alwaysApply: false
+---
+
+# Apex — Invocable Action Structure
+
+## Required pattern
+
+```java
+public class MyAction {
+
+    public class Request {
+        @InvocableVariable(label='Record Id' required=true)
+        public String recordId;
+    }
+
+    public class Response {
+        @InvocableVariable(label='Status')
+        public String status;
+    }
+
+    @InvocableMethod(
+        label='My Action Label'
+        description='What this action does.'
+        callout=true   // required if ANY code path makes an HTTP callout
+    )
+    public static List<Response> run(List<Request> requests) {
+        List<Response> responses = new List<Response>();
+        for (Request req : requests) {
+            responses.add(process(req));
+        }
+        return responses;
+    }
+
+    private static Response process(Request req) {
+        Response resp = new Response();
+        try {
+            // ... logic here ...
+            resp.status = 'OK';
+        } catch (Exception ex) {
+            System.debug('MyAction error: ' + ex.getMessage() + '\n' + ex.getStackTraceString());
+            resp.status = 'Error: ' + ex.getMessage();
+        }
+        return resp;
+    }
+}
+```
+
+## Key rules
+
+- `@InvocableVariable` is required on every field in Request and Response — without it, Flow cannot bind the field
+- `callout=true` on `@InvocableMethod` is required even if only one code path makes a callout — omitting it causes a runtime error the first time a callout is attempted
+- Always return a `List<Response>` — Flow passes requests in bulk even when only one record triggers
+- Never throw from the `@InvocableMethod` method — catch all exceptions, write to `System.debug`, and return a status string so Flow execution can continue
+- Do all DML in a single consolidated write at the end of `process()` — multiple DML statements on the same record within one transaction cause lock errors
+
+## Passing lists of values from Flow to Apex
+
+Flow cannot pass `List<String>` directly as an `@InvocableVariable`. Use comma-separated strings and split/filter in Apex:
+
+```java
+// In Request
+@InvocableVariable(label='Product Codes (comma-separated)') public String productCodes;
+
+// In Apex
+List<String> codes = new List<String>();
+for (String s : req.productCodes.split(',')) {
+    if (!String.isBlank(s)) codes.add(s.trim());
+}
+```
